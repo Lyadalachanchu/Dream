@@ -40,12 +40,16 @@ class FKSampler(BaseSampler):
             print(f"x shape: {x.shape}")
             # convert ids to text and calculate the rewards
             texts = self.tokenizer.batch_decode(x.tolist(), skip_special_tokens=True)
+            # use the intermediate text itself to calculate the reward
+            # TO_EXPLORE: Jump straight to t=0 and calculate reward on that?
             rewards = torch.tensor(self.reward_fn(texts))
             print(f"rewards shape: {rewards}")
 
             # sample with particles with replacement based on the normalized rewards
-            # softmax of the rewards
-            normalized_rewards = nn.functional.softmax(rewards, dim=0)
+            # normalize the rewards
+            alpha = 4
+            rewards = rewards.pow(alpha)
+            normalized_rewards = rewards / rewards.sum()
             print(f"normalized_rewards: {normalized_rewards}")
 
             # resample
