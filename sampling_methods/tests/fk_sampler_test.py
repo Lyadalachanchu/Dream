@@ -20,7 +20,7 @@ def main():
 
     reward_model = RewardModel()
     
-    sampler = FKSampler("DIFFERENCE", n=4, reward_fn=reward_model.reward_fn)
+    sampler = FKSampler("DIFFERENCE", resample_every_n=4, reward_fn=reward_model.reward_fn)
     prompt = "You are a professional restaurant ciritc. Give me a review about for the Peruvian restaurant, el casa, in Amsterdam."
 
     start_generate = time.time()

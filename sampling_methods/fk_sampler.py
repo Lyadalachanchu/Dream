@@ -8,9 +8,9 @@ import os
 import torch.nn as nn
 
 class FKSampler(BaseSampler):
-    def __init__(self, potential:str, n:int, reward_fn: 'Callable[[str], [float]]'):
+    def __init__(self, potential:str, resample_every_n:int, reward_fn: 'Callable[[str], [float]]', detail_steps=64):
         self.potential = potential
-        self.resample_every_n = n
+        self.resample_every_n = resample_every_n
 
         model_path = "Dream-org/Dream-v0-Instruct-7B"
         model = AutoModel.from_pretrained(
@@ -20,6 +20,11 @@ class FKSampler(BaseSampler):
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, padding_side='left') 
         self.model = model.to("cuda").eval()
         self.reward_fn = reward_fn
+        self.detail_steps = detail_steps
+
+        # reward 2d array to keep track of reward history for each particle at latest timestep
+        # TODO: This takes an uncessary amount of memory (to be general). Implement a different reward history for each potential implemented
+        self.reward_history = []
 
         log_dir = "logs"
         log_file = os.path.join(log_dir, "fk_sampler.out")
@@ -42,20 +47,38 @@ class FKSampler(BaseSampler):
             texts = self.tokenizer.batch_decode(x.tolist(), skip_special_tokens=True)
             # use the intermediate text itself to calculate the reward
             # TO_EXPLORE: Jump straight to t=0 and calculate reward on that?
-            rewards = torch.tensor(self.reward_fn(texts))
-            print(f"rewards shape: {rewards}")
+            rewards = self.reward_fn(texts)
+            print(f"rewards: {rewards}")
+
+            # first add the rewards to their respective particle; there are n rewards and n rows in self.reward_history
+            [self.reward_history[i].append(rewards[i]) for i in range(len(rewards))]
+
+            # calculate the difference potential
+            reward_diff = [rewards[i]-self.reward_history[i][-2] for i in range(len(rewards))]
+            reward_diff = torch.tensor(reward_diff, dtype=torch.float32)
 
             # sample with particles with replacement based on the normalized rewards
             # normalize the rewards
-            alpha = 4
-            rewards = rewards.pow(alpha)
-            normalized_rewards = rewards / rewards.sum()
+            alpha = 2
+            # rewards = rewards.pow(alpha)
+            reward_diff = reward_diff*alpha
+            reward_diff = reward_diff.exp()
+            normalized_rewards = reward_diff / (reward_diff.sum() + 1e-8)
+
             print(f"normalized_rewards: {normalized_rewards}")
 
             # resample
             idx = torch.multinomial(normalized_rewards, num_samples=len(x), replacement=True)
+
+            # resample reward histories
+            self.reward_history = [self.reward_history[i].copy() for i in idx.tolist()]
+
+            print(f"reward history: {self.reward_history}")
+
             X_sampled = x[idx]
             print(f"idx: {idx}")
+            # Assume the proposal function is just the diffusion model 
+            # (for now; later we'll change it to the optimal proposal function with nested sampling)
             return X_sampled
             
         return x
@@ -67,6 +90,10 @@ class FKSampler(BaseSampler):
 
         messages = [[{"role": "user", "content": prompt}] for _ in range(n)]
         generations: list[str] = []
+
+        # we have to keep track of reward histories for n particles at each time step
+        # we use the difference potential (use a different initialization, other than 0 for the other potentials)
+        self.reward_history.extend([[0] for _ in range(n)])
 
         for batch_idx, start in enumerate(range(0, n, max_gpu_n), start=1):
             end = min(start + max_gpu_n, n)
@@ -93,7 +120,7 @@ class FKSampler(BaseSampler):
                 max_new_tokens=256,
                 output_history=True,
                 return_dict_in_generate=True,
-                steps=64,
+                steps=self.detail_steps,
                 temperature=0.2,
                 top_p=0.95,
                 generation_tokens_hook_func=self.generation_tokens_hook_func
