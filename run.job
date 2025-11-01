@@ -1,0 +1,15 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=9
+#SBATCH --gpus=1
+#SBATCH --partition=gpu_h100
+#SBATCH --time=01:00:00
+#SBATCH --output=logs/%x-%j.out
+
+
+source .venv/bin/activate
+# srun python demo_token_control.py
+# srun python -m sampling_methods.tests.best_of_n_test
+# srun python demo_batch_completion.py
+srun python -m sampling_methods.tests.fk_sampler_test

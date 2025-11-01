@@ -22,7 +22,8 @@ attention_mask = inputs.attention_mask.to(device="cuda")
 # Use a hook function to set the final sentence to be end_ids at each intermediate step
 # You can change it to control whatever you want about x in each step with this hook
 def generation_tokens_hook_func(step, x, logits):
-    x[0, -len(end_ids):] = end_ids
+    # x[0, -len(end_ids):] = end_ids
+    print(f"step: {step}; x: {x}; logits: {logits}")
     return x
 
 output = model.diffusion_generate(
