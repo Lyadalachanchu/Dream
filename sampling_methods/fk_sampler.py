@@ -59,8 +59,9 @@ class FKSampler(BaseSampler):
 
             # sample with particles with replacement based on the normalized rewards
             # normalize the rewards
-            alpha = 2
+            alpha = 5
             # rewards = rewards.pow(alpha)
+            # TODO: If the proposal is not equal to the model, then add the (log) probability and subtract the new probability from the new proposal distribution 
             reward_diff = reward_diff*alpha
             reward_diff = reward_diff.exp()
             normalized_rewards = reward_diff / (reward_diff.sum() + 1e-8)
