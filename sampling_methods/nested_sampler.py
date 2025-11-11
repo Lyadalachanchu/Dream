@@ -100,47 +100,44 @@ class NestedSampler(BaseSampler):
         mask_token_id = self._resolve_mask_token_id()
         num_particles = self.reward_particles
         batch_size, seq_len = x.shape
-
-        x_for_reward = x.clone()
+        x_particles = x.clone().unsqueeze(1)
         if num_particles > 1:
-            x_for_reward = x_for_reward.unsqueeze(1).repeat(1, num_particles, 1)
-            x_for_reward = x_for_reward.view(batch_size * num_particles, seq_len)
-
-        attn_mask_forward = attn_mask
-        tok_idx_forward = tok_idx
-        if isinstance(attn_mask, torch.Tensor) and num_particles > 1:
-            attn_mask_forward = attn_mask.repeat_interleave(num_particles, dim=0).contiguous()
-        if tok_idx is not None and num_particles > 1:
-            tok_idx_forward = tok_idx.repeat_interleave(num_particles, dim=0).contiguous()
+            x_particles = x_particles.repeat(1, num_particles, 1)
+        x_particles = x_particles.contiguous()
 
         with torch.no_grad():
-            outputs = self.model(x_for_reward, attention_mask=attn_mask_forward, tok_idx=tok_idx_forward)
+            outputs = self.model(
+                x,
+                attention_mask=attn_mask,
+                tok_idx=tok_idx,
+            )
             logits = outputs.logits
 
         logits = torch.cat([logits[:, :1], logits[:, :-1]], dim=1)
-        mask_index = (x_for_reward == mask_token_id)
-        if mask_index.any():
-            temperature = 0.8
-            top_p = None
-            top_k = None
-            if self._hook_context is not None:
-                temperature = self._hook_context.get("temperature", 0.0) or 0.0
-                top_p = self._hook_context.get("top_p")
-                top_k = self._hook_context.get("top_k")
+        mask_index = (x == mask_token_id)
+        if not mask_index.any():
+            return x_particles
+
+        logits_for_masks = logits[mask_index]
+        temperature = 0.8
+        top_p = None
+        top_k = None
+        if self._hook_context is not None:
+            temperature = self._hook_context.get("temperature", 0.0) or 0.0
+            top_p = self._hook_context.get("top_p")
+            top_k = self._hook_context.get("top_k")
+
+        for particle_idx in range(num_particles):
+            particle_batch = x_particles[:, particle_idx, :]
             _, sampled = sample_tokens(
-                logits[mask_index],
+                logits_for_masks,
                 temperature=temperature,
                 top_p=top_p,
                 top_k=top_k,
             )
-            x_for_reward[mask_index] = sampled
+            particle_batch[mask_index] = sampled
 
-        if num_particles > 1:
-            x_for_reward = x_for_reward.view(batch_size, num_particles, seq_len)
-        else:
-            x_for_reward = x_for_reward.view(batch_size, 1, seq_len)
-
-        return x_for_reward
+        return x_particles
 
     def _aggregate_particle_rewards(self, rewards: torch.Tensor) -> torch.Tensor:
         return rewards.mean(dim=1)
@@ -163,9 +160,10 @@ class NestedSampler(BaseSampler):
             alpha = 5
             outer_texts = self._decode_generated_texts(x)
             outer_rewards = torch.tensor(self.reward_fn(outer_texts), dtype=torch.float32, device=x.device)
+            raw_avg_reward = outer_rewards.mean().item()
+            raw_max_reward = outer_rewards.max().item()
+            print(f"Average reward: {raw_avg_reward:.4f} | Max reward: {raw_max_reward:.4f}")
             outer_weights = outer_rewards.pow(alpha)
-            avg_reward = outer_weights.mean().item()
-            print(f"Average reward: {avg_reward:.4f}")
             normalized_outer = self._normalize_weights(outer_weights)
 
             ess_value = (1.0 / torch.sum(normalized_outer ** 2)).item()

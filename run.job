@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=9
 #SBATCH --gpus=1
 #SBATCH --partition=gpu_h100
-#SBATCH --time=01:00:00
+#SBATCH --time=06:00:00
 #SBATCH --output=logs/%x-%j.out
 
 
@@ -14,3 +14,4 @@ source .venv/bin/activate
 # srun python demo_batch_completion.py
 # srun python -m sampling_methods.tests.fk_sampler_test
 srun python -m sampling_methods.tests.nested_sampler_test
+# srun python -m sampling_methods.tests.grid_test

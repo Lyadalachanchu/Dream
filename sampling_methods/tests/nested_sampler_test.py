@@ -22,10 +22,10 @@ def main():
     
     # TODO: don't resample after a fixed steps. Look at effective sample size.
     sampler = NestedSampler(resample_every_n=2, reward_fn=reward_model.reward_fn, reward_particles=6)
-    prompt = "You are a professional restaurant ciritc. Give me a review about for the Peruvian restaurant, el casa, in Amsterdam."
+    prompt = "You are a professional restaurant critic. Give me a review about for the Peruvian restaurant, el casa, in Amsterdam."
 
     start_generate = time.time()
-    samples = sampler.generate(prompt, n=32, max_gpu_n=192)
+    samples = sampler.generate(prompt, n=64, max_gpu_n=192)
     end_generate = time.time()
     logger.info(f"Time taken for sampler.generate: {end_generate - start_generate:.2f} seconds")
     for sample in samples:
