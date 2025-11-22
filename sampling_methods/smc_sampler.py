@@ -8,8 +8,12 @@ from tqdm import tqdm
 import torch.nn as nn
 
 class SMCSampler(BaseSampler):
-    def __init__(self, reward_fn: 'Callable[[str], [float]]', detail_steps=64):
+    def __init__(self, reward_fn: 'Callable[[str], [float]]', detail_steps=64, 
+                 temperature=2.0, ess_threshold=0.9, min_resample_step=20):
         self.detail_steps = detail_steps
+        self.temperature = temperature  # Temperature for softening exponential
+        self.ess_threshold = ess_threshold  # ESS threshold (0.5 = resample when ESS < 50% of particles)
+        self.min_resample_step = min_resample_step  # Don't resample before this step
         model_path = "Dream-org/Dream-v0-Instruct-7B"
         model = AutoModel.from_pretrained(
             model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
@@ -30,9 +34,13 @@ class SMCSampler(BaseSampler):
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
 
+    def _calculate_ess(self, normalized_weights):
+        """Calculate Effective Sample Size (ESS)"""
+        return 1.0 / (normalized_weights.pow(2).sum() + 1e-8)
+
     # create hook to calculate score and resample intermediate x's
     def generation_tokens_hook_func(self, step, x, logits):
-        if step != None and step > 40 and logits != None and x != None:
+        if step != None and step >= self.min_resample_step and logits != None and x != None:
             # 1. Calculate reward
             # convert ids to text and calculate the rewards
             texts = self.tokenizer.batch_decode(x.tolist(), skip_special_tokens=True)
@@ -49,14 +57,27 @@ class SMCSampler(BaseSampler):
             # use the intermediate text itself to calculate the reward
             rewards = torch.tensor(reward_values, dtype=torch.float32)
 
-            # 2. Normalize rewards
-            rewards = rewards.exp()
+            # 2. Normalize rewards with temperature to soften exponential
+            # Divide by temperature before exponentiating to reduce concentration
+            rewards = (rewards / self.temperature).exp()
             normalized_rewards = rewards / (rewards.sum() + 1e-8)
 
-            # 3. Resample based on normalized rewards
-            idx = torch.multinomial(normalized_rewards, num_samples=len(x), replacement=True)
-            X_sampled = x[idx]
-            return X_sampled
+            # 3. Check Effective Sample Size (ESS) - only resample if diversity is low
+            ess = self._calculate_ess(normalized_rewards)
+            ess_ratio = ess.item() / len(x)
+            self.logger.info(
+                "Step %s | ESS: %.2f (%.1f%% of particles) | Threshold: %.1f%%",
+                step, ess.item(), ess_ratio * 100, self.ess_threshold * 100
+            )
+            
+            # Only resample if ESS is below threshold (diversity is low)
+            if ess_ratio < self.ess_threshold:
+                self.logger.info("Step %s | Resampling triggered (ESS below threshold)", step)
+                idx = torch.multinomial(normalized_rewards, num_samples=len(x), replacement=True)
+                X_sampled = x[idx]
+                return X_sampled
+            else:
+                self.logger.info("Step %s | Skipping resampling (ESS above threshold)", step)
             
         return x
 

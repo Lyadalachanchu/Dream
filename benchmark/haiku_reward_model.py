@@ -2,12 +2,44 @@ import logging
 import math
 import os
 import re
+from typing import List
 
 
 class HaikuRewardModel:
-    """Reward model that scores how closely a text resembles a 5/7/5 haiku."""
+    """Reward model that favors 5/7/5 syllable structure with mild style priors."""
 
     TARGET_SYLLABLES = (5, 7, 5)
+    _SEASON_WORDS = {
+        "spring",
+        "summer",
+        "autumn",
+        "fall",
+        "winter",
+        "snow",
+        "blossom",
+        "bloom",
+        "petal",
+        "harvest",
+        "frost",
+        "breeze",
+        "rain",
+    }
+    _SYLLABLE_EXCEPTIONS = {
+        "autumn": 2,
+        "blossom": 2,
+        "echo": 2,
+        "fire": 1,
+        "hour": 2,
+        "ocean": 2,
+        "poem": 2,
+        "quiet": 2,
+        "rhythm": 2,
+        "sapphire": 2,
+        "season": 2,
+        "tower": 2,
+        "violet": 3,
+        "water": 2,
+    }
 
     def __init__(self):
         log_dir = "logs"
@@ -21,75 +53,114 @@ class HaikuRewardModel:
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
 
-    def reward_fn(self, texts: list[str]) -> list[float]:
-        """Return scores in (0, 1], higher is closer to the 5/7/5 target."""
-        self.logger.info("Scoring %d texts for haiku structure", len(texts))
-        rewards: list[float] = []
+    def reward_fn(self, texts: List[str]) -> List[float]:
+        rewards: List[float] = []
+        self.logger.info("Scoring %d texts for haiku quality", len(texts))
         for idx, text in enumerate(texts):
             lines = self._extract_candidate_lines(text)
-            syllable_counts = [self._count_syllables(line) for line in lines]
-            weights = [
-                math.exp(-abs(syllables - target))
-                for syllables, target in zip(syllable_counts, self.TARGET_SYLLABLES)
-            ]
-            reward = sum(weights) / len(weights)
+            line_scores = []
+            syllable_counts = []
+            for line_idx, target in enumerate(self.TARGET_SYLLABLES):
+                line_text = lines[line_idx] if line_idx < len(lines) else ""
+                syllables = self._count_syllables(line_text)
+                syllable_counts.append(syllables)
+                closeness = math.exp(-abs(syllables - target))
+                if not line_text.strip():
+                    # Encourage partial completions to keep writing instead of zeroing reward
+                    closeness *= 0.2
+                line_scores.append(closeness)
+            avg_score = sum(line_scores) / len(self.TARGET_SYLLABLES)
+            extra_line_penalty = math.exp(
+                -0.6 * max(0, len(lines) - len(self.TARGET_SYLLABLES))
+            )
+            season_bonus = self._season_word_bonus(text)
+            reward = min(1.0, avg_score * extra_line_penalty + season_bonus)
             rewards.append(reward)
             self.logger.info(
-                "Text %d: lines=%s syllables=%s weights=%s reward=%.3f",
+                "Text %d: lines=%s syllables=%s line_scores=%s base=%.3f penalty=%.3f season=%.3f reward=%.3f",
                 idx,
-                lines,
+                len(lines),
                 syllable_counts,
-                [round(w, 3) for w in weights],
+                [round(score, 3) for score in line_scores],
+                avg_score,
+                extra_line_penalty,
+                season_bonus,
                 reward,
             )
         return rewards
 
-    def _extract_candidate_lines(self, text: str) -> list[str]:
-        stripped = text.strip()
+    def _extract_candidate_lines(self, text: str) -> List[str]:
+        stripped = text.replace("\r\n", "\n").strip()
         if not stripped:
-            return ["", "", ""]
-
+            return []
         newline_lines = [line.strip() for line in stripped.splitlines() if line.strip()]
-        if len(newline_lines) >= 3:
-            return newline_lines[:3]
+        if len(newline_lines) >= len(self.TARGET_SYLLABLES):
+            return newline_lines[: len(self.TARGET_SYLLABLES)]
 
-        sentence_lines = [
-            seg.strip()
-            for seg in re.split(r"[.!?]+", stripped)
-            if seg.strip()
-        ]
-        if len(sentence_lines) >= 3:
-            return sentence_lines[:3]
+        segments: List[str] = []
+        for chunk in newline_lines or [stripped]:
+            segments.extend(self._split_on_punctuation(chunk))
+        if len(segments) >= len(self.TARGET_SYLLABLES):
+            return segments[: len(self.TARGET_SYLLABLES)]
 
-        # Fall back to splitting on commas or whitespace to always provide three candidates.
-        tokens = re.split(r"[,;/]+|\s+", stripped)
-        tokens = [tok for tok in tokens if tok]
+        tokens = re.findall(r"[A-Za-z']+", stripped)
         if not tokens:
-            return ["", "", ""]
-        chunk_size = max(1, len(tokens) // 3)
-        chunks = [
-            " ".join(tokens[i : i + chunk_size]) for i in range(0, len(tokens), chunk_size)
+            return []
+        approx_len = max(1, len(tokens) // len(self.TARGET_SYLLABLES))
+        lines = [
+            " ".join(tokens[i : i + approx_len])
+            for i in range(0, len(tokens), approx_len)
         ]
-        while len(chunks) < 3:
-            chunks.append("")
-        return chunks[:3]
+        return lines[: len(self.TARGET_SYLLABLES)]
+
+    def _split_on_punctuation(self, text: str) -> List[str]:
+        return [
+            segment.strip()
+            for segment in re.split(r"[\\/|,;:?!]+|-{2,}|—|–", text)
+            if segment.strip()
+        ]
 
     def _count_syllables(self, line: str) -> int:
-        words = [re.sub(r"[^a-zA-Z]", "", word).lower() for word in line.split()]
-        words = [word for word in words if word]
-        return sum(self._estimate_word_syllables(word) for word in words)
+        if not line.strip():
+            return 0
+        words = re.findall(r"[A-Za-z']+", line.lower())
+        if not words:
+            return 0
+        return sum(self._count_syllables_in_word(word) for word in words)
 
-    def _estimate_word_syllables(self, word: str) -> int:
+    def _count_syllables_in_word(self, word: str) -> int:
         if not word:
             return 0
+        if word in self._SYLLABLE_EXCEPTIONS:
+            return self._SYLLABLE_EXCEPTIONS[word]
+
+        word = re.sub(r"[^a-z]", "", word)
+        if not word:
+            return 0
+
         vowels = "aeiouy"
-        count = 0
+        syllables = 0
         prev_is_vowel = False
         for char in word:
             is_vowel = char in vowels
             if is_vowel and not prev_is_vowel:
-                count += 1
+                syllables += 1
             prev_is_vowel = is_vowel
-        if word.endswith("e") and count > 1:
-            count -= 1
-        return max(count, 1)
+
+        if word.endswith("e") and not word.endswith(("le", "ye")) and syllables > 1:
+            syllables -= 1
+        if word.endswith("le") and len(word) > 2 and word[-3] not in vowels:
+            syllables += 1
+
+        return max(syllables, 1)
+
+    def _season_word_bonus(self, text: str) -> float:
+        if not text:
+            return 0.0
+        tokens = {tok.lower() for tok in re.findall(r"[A-Za-z']+", text)}
+        if not tokens:
+            return 0.0
+        overlap = len(tokens & self._SEASON_WORDS)
+        if overlap == 0:
+            return 0.0
+        return min(0.05 * overlap, 0.15)
