@@ -1,3 +1,7 @@
+from _path_helper import ensure_project_root_on_path
+
+ensure_project_root_on_path()
+
 from sampling_methods.nested_sampler import NestedSampler
 import logging
 import os

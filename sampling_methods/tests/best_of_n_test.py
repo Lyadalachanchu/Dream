@@ -1,3 +1,7 @@
+from _path_helper import ensure_project_root_on_path
+
+ensure_project_root_on_path()
+
 from sampling_methods.best_of_n_sampler import BestOfNSampler
 from benchmark.reward_model import RewardModel
 import logging

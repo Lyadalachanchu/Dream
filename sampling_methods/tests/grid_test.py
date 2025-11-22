@@ -8,6 +8,10 @@ import sys
 import time
 from typing import Dict, List, Tuple
 
+from _path_helper import ensure_project_root_on_path
+
+ensure_project_root_on_path()
+
 from benchmark.reward_model import RewardModel
 from sampling_methods.nested_sampler import NestedSampler
 

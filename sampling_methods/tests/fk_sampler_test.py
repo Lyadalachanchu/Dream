@@ -1,3 +1,7 @@
+from _path_helper import ensure_project_root_on_path
+
+ensure_project_root_on_path()
+
 from sampling_methods.fk_sampler import FKSampler
 import logging
 import os

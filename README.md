@@ -95,6 +95,10 @@ First, install [Gradio](https://www.gradio.app) `pip install gradio`, and then y
 - `generation_logits_hook_func`: a hook that can be user-defined to control the logits at each intermediate step, e.g., do some guidance.
 - `generation_tokens_hook_func`: a hook that can be user-defined to control the tokens at each intermediate step, e.g., print, infill, or other token control strategies. See `demo_token_control.py` for reference.
 
+## Reward helpers
+- `benchmark.reward_model.RewardModel`: sentiment-focused reward (higher = more negative) useful for steering tone.
+- `benchmark.haiku_reward_model.HaikuRewardModel`: computes `exp(-|syllables - target|)` per 5/7/5 line and averages the weights, giving a dense reward for haiku diffusion.
+- `benchmark.sestina_reward_model.SestinaRewardModel`: checks line counts and rotating end-word usage to approximate a sestina structure, returning a `[0, 1]` reward.
 
 ## Evaluation
 The evaluation is based on [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness), so you should first install it with:
